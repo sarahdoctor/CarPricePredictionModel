@@ -1,0 +1,159 @@
+---
+title: "PAC Assignment"
+author: "Sarah Doctor"
+format: html
+editor: visual
+---
+
+## Introduction
+
+The predictive analytics competition on Kaggle required us to create the best possible model to predict the price of car using a dataset containing information on 40,000 used cars. After cleaning the data, imputing missing values and creating 13 different predictive models, I was able to obtain a score of 3,537. In order to build this model, I undertook the steps listed below.
+
+## Data Wrangling
+
+The dataset provided had multiple kinds of variables, both categorical and numerical. In addition to this several columns also had multiple missing values. In the first step of cleaning, multiple columns were excluded from the analysis due to large strings, that would be difficult to interpret. Following this, columns containing characters were converted into factors, to facilitate statistical modelling.
+
+The next step was to identify columns that contained missing values and analyse their spread. After analysing the spread, we can observe there were 8 columns that contained missing values.
+
+![](Desktop/Data Frameworks/PAC/NAs.png){width="412"}
+
+```{carData <- select(carData,  -c("make_name", "model_name", "trim_name", "body_type",}
+                               "power", "torque", "transmission", "transmission_display", 
+                               "wheel_system_display", "engine_type", "description", 
+                               "exterior_color", "interior_color", "major_options", 
+                               "franchise_make", "listed_date"))
+
+
+carData$fleet <- as.factor(carData$fleet) 
+carData$frame_damaged <- as.factor(carData$frame_damaged) 
+carData$franchise_dealer <- as.factor(carData$franchise_dealer) 
+carData$has_accidents <- as.factor(carData$has_accidents) 
+carData$isCab <- as.factor(carData$isCab) 
+carData$is_new <- as.factor(carData$is_new) 
+carData$salvage <- as.factor(carData$salvage)
+
+#Find NAs
+na_sum <- colSums(is.na(carData))
+na_table <- data.frame(Column = names(na_sum), NA_Sum = na_sum)
+print(na_table)
+```
+
+Here, we remove the owner_count column from the analysis as close to 50% of the data is missing. Which such a high number, even after treatment the results produced would not be reliable. We retain the remaining columns that contain between 3 -- 4324 NAs.  To treat these NAs, initially I used one hot encoding. However I then imputed the data using MICE. Since we are dealing with different kinds of variables, MICE can handle mixed-data type. Further, it reduced the bias by creating multiple imputations as opposed to using mean or median values.
+
+```{#delete owner count due to high value of NAs}
+carData <- select(carData, - "owner_count")
+
+#Treat NAs using MICE
+md.pattern(carData)
+
+imputedData <- mice(carData, m = 5, method = "rf")
+completeData <- complete(imputedData, 1)
+```
+
+## Models
+
+As the dataset is significantly large, we split it into a training data set and testing dataset. Using this, I ran a multivariate linear regression model, regression tree models, random forest models and an XG Boost model. By comparing the RMSEs for the models, I found that the XG Boost model had the lowest RMSE score of the test data at 4463.12.
+
+However, when attempting to run the model on the Scoring dataset I encountered an error due to the matrix format which I was unable to resolve.
+
+The model that gave me the next most accurate predictions was the random forest model with imputed data. This gave me an RMSE of 4986.44 on the scoring data.
+
+```{#Random Forest Model}
+
+ind <- sample(2, nrow(completeData), replace = TRUE, prob = c(0.7, 0.3))
+set.seed(3247)
+trainData <- completeData[ind == 1, ]
+testData <- completeData[ind == 2, ]
+
+
+predictors <- setdiff(names(trainData), "price")
+train_predictors <- trainData[predictors]
+train_response <- trainData$price
+test_predictors <- testData[predictors]
+test_response <- testData$price
+
+library(randomForest)
+# Train the Random Forest model
+rf_model <- randomForest(x = train_predictors, y = train_response, na.action = na.omit)
+
+plot(rf_model)
+
+# Predict on train and test data 
+predictionsTrain <- predict(cvModel, train_predictors)
+predictions <- predict(cvModel, test_predictors)
+
+# RMSEs
+library(Metrics)
+rmse(train_response, predictionsTrain)
+rmse(test_response, predictions)
+
+# Load and prepare scoringData
+scoringData <- read.csv("/Users/sarahdoctor/Desktop/scoringData.csv")
+# Select the same columns as used for training (excluding the target variable 'price')
+scoring_selected <- scoringData[, setdiff(selected_columns, "price")]
+
+#  missing values for scoring data
+scoring_selected[, numeric_columns] <- lapply(scoring_selected[, numeric_columns], function(x) {
+  ifelse(is.na(x), mean(x, na.rm = TRUE), x)
+})
+
+scoring_selected[, categorical_columns] <- lapply(scoring_selected[, categorical_columns], function(x) {
+  mode <- names(sort(table(x), decreasing = TRUE))[1]
+  ifelse(is.na(x), mode, x)
+})
+
+# Create a new dummyVars object for scoring data
+scoring_data_encoded <- dummyVars("~ .", data = scoring_selected)
+
+# One-hot encoding 
+scoring_final <- predict(scoring_data_encoded, newdata = scoring_selected)
+
+# Ensure the columns of scoring_final match those of your training data
+train_columns <- setdiff(names(trainData), "price")
+missing_columns <- setdiff(train_columns, names(scoring_final))
+scoring_final <- cbind(scoring_final, matrix(0, ncol = length(missing_columns), nrow = nrow(scoring_final), dimnames = list(NULL, missing_columns)))
+scoring_final <- scoring_final[, train_columns]
+
+# Run predictions
+predictions <- predict(rf_model, scoring_final)
+print(predictions)
+
+submissionFile = data.frame(id = scoringData$id, price = predictions)
+write.csv(submissionFile, 'sarah_RandomForestNew.csv',row.names = F)
+```
+
+![](Desktop/Data Frameworks/PAC/RFModel.png){width="477"}
+
+I attempted tuning this model using 5-fold cross validation the model. By observing the graph above I used 100 trees, and tested different mtrys and min node sizes. However, I faced an error in the evaluation process and was unable to make a prediction. The regression tree models used had significantly higher RMSEs while the random forest model using one-hot encoding suffered from overfitting.
+
+```{#Random Forest Tuning Attempt}
+
+trControl=trainControl(method="cv",number=5)
+tuneGrid = expand.grid(mtry=1:4)
+set.seed(617)
+cvModel = train(train_response~train_predictors,
+                method="rf",ntree=100,trControl=trControl,tuneGrid=tuneGrid )
+cvModel
+```
+
+## Comparison Between All Models
+
+![](images/Screenshot 2023-12-11 at 8.35.04 PM.png)
+
+## Limitations
+
+In spite excluding several variables from the analysis, the process was extremely slow, making it difficult to conduct further analysis to improve the model.
+
+-   Feature engineering could have been used to capture more nuanced relationships between the variables.
+
+-    Cross-validation could have been utilised to validate the performance of the model and gain a better estimate.
+
+## Key Takeaways
+
+This assignment was extremely helpful in applying all our learnings through the semester.
+
+-    If I were to redo this assignment, I would focus more on creating a working model and then spending time optimising it. By focusing on maximising accuracy at each step, I wasted large amounts of time caused by multiple errors. By focusing coding, I would also gain a more holistic perspective on how each step taken contributes.
+
+-   I learnt the importance data wrangling in building a powerful predictive model. In the future, I will spend more time on this step as it plays a key role in building an accurate model. Further, visualizing the data during these steps helps provide a better understanding of variables.
+
+-   I was able to recognition of the significance of a systematic approach to model evaluation and validation to ensure that changes are actually improving the power of the model. Spending more time on cross-validation and out-of-sample testing is a crucial aspect for building a well-functioning model suited to solve real problems.
